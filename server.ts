@@ -197,7 +197,7 @@ function parseCSV(csvText: string) {
         studentObj.id = "std-sync-" + Math.random().toString(36).substring(2, 11);
       }
       if (!studentObj.avatar) {
-        studentObj.avatar = `https://images.unsplash.com/photo-${1535713875002-d1d0cf377fde?w=100}`;
+        studentObj.avatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100';
       }
       if (!studentObj.parentContact) {
         studentObj.parentContact = "Chưa cấu hình";
