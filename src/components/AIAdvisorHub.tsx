@@ -2,6 +2,116 @@ import React, { useState, useEffect } from 'react';
 import { Student, AIAnalysisResult } from '../types';
 import { Sparkles, Brain, Award, AlertTriangle, ShieldAlert, FileText, CheckCircle2, Copy, BarChart2, Lightbulb, UserCheck, Play, ArrowRight, RefreshCw, Clipboard, X } from 'lucide-react';
 import pptxgen from 'pptxgenjs';
+import { GoogleGenAI, Type } from '@google/genai';
+
+// AI System Instruction & pedagogical rules
+const SYSTEM_INSTRUCTION = `
+Bạn là một Chuyên gia cấp cao về Công nghệ Giáo dục (EdTech) và là Trợ lý Quản trị Lớp học Thông minh (EdTech Solutions Architect & Classroom Management Advisor). Bạn đóng vai trò là "bộ não" phân tích tích hợp, có khả năng xử lý dữ liệu học sinh phức tạp (điểm số, thái độ thi đua, nhận xét, tự đánh giá, đánh giá đồng đẳng), phân tích hành vi và thành tích để hỗ trợ giáo viên đưa ra các quyết định giáo dục chính xác và kịp thời.
+
+Mục tiêu cốt lõi của bạn:
+1. Tối ưu hóa quy trình vận hành: Chuyển đổi dữ liệu học thuật và điểm thái độ (Gamification) thành thông tin giá trị.
+2. Giảm tải hành chính: Tự động tổng hợp, báo cáo và xếp hạng dễ hiểu.
+3. Cá nhân hóa giáo dục: Nhận xét xu hướng tiến bộ và hỗ trợ sa sút của học sinh.
+4. Hỗ trợ quyết định: Đưa ra kiến nghị sư phạm/khuyên ngăn tâm lý kịp thời thiết thực.
+
+Quy tắc sư phạm:
+1. Gamification: Phân tách rõ rệt giữa Học thuật (grade) và Thái độ (attitudeScore). Nhận biết các tags thi đua cụ thể (+5 phát biểu, -2 làm việc riêng).
+2. Đánh giá đa chiều: Tổng hợp cả nhận xét GV, tự nhận xét của học sinh (độ tự tin, phản ánh học tập), và đánh giá đồng đẳng từ bạn học.
+3. Ghi chú thông minh: Liên kết lịch sử điểm số/thi đua để gợi ý phương pháp can thiệp thích hợp.
+4. Ngôn ngữ & Tính khí: Chuyên nghiệp, nhạy bén, đồng cảm và tin cậy. Dùng thuật ngữ sư phạm hiện đại dễ hiểu. Báo cáo số liệu ngắn gọn nhưng tư vấn tâm lý cần sâu sắc.
+`;
+
+const step1Schema = {
+  type: Type.OBJECT,
+  properties: {
+    dashboardSummary: {
+      type: Type.OBJECT,
+      properties: {
+        averageGrade: { type: Type.NUMBER, description: "Trung bình cộng điểm số của cả lớp" },
+        totalStudents: { type: Type.NUMBER, description: "Tổng số học sinh được phân tích" },
+        averageAttitude: { type: Type.NUMBER, description: "Trung bình xếp thứ điểm thái độ thi đua của cả lớp" },
+        excellenceRatio: { type: Type.NUMBER, description: "Phần trăm học sinh thuộc nhóm xuất sắc/mũi nhọn (0-100)" },
+        supportNeededRatio: { type: Type.NUMBER, description: "Phần trăm học sinh thuộc nhóm rủi ro/sa sút cần hỗ trợ (0-100)" }
+      },
+      required: ["averageGrade", "totalStudents", "averageAttitude", "excellenceRatio", "supportNeededRatio"]
+    },
+    deepInsights: {
+      type: Type.OBJECT,
+      properties: {
+        shiningStars: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              studentId: { type: Type.STRING },
+              name: { type: Type.STRING },
+              achievement: { type: Type.STRING, description: "Sự tuyên dương cụ thể đầy khuyến khích từ AI" }
+            },
+            required: ["studentId", "name", "achievement"]
+          }
+        },
+        riskGroup: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              studentId: { type: Type.STRING },
+              name: { type: Type.STRING },
+              reason: { type: Type.STRING, description: "Lý do cụ thể, phân tích nguyên nhân học thuật hay thái độ" },
+              category: { type: Type.STRING, description: "academic, behavior hoặc both" }
+            },
+            required: ["studentId", "name", "reason", "category"]
+          }
+        }
+      },
+      required: ["shiningStars", "riskGroup"]
+    }
+  },
+  required: ["dashboardSummary", "deepInsights"]
+};
+
+const step2Schema = {
+  type: Type.OBJECT,
+  properties: {
+    trendAnalytics: { type: Type.STRING, description: "Phân tích biến động, xu hướng và bầu không khí chung của lớp bằng lời văn sư phạm sâu rộng." },
+    aiRecommendations: {
+      type: Type.OBJECT,
+      properties: {
+        shortTerm: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Các hành động can thiệp ngắn hạn cụ thể cho từng em hoặc đội nhóm"
+        },
+        longTerm: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "Định hướng chiến lược dài hạn cho cả lớp và cơ cấu học tập"
+        }
+      },
+      required: ["shortTerm", "longTerm"]
+    }
+  },
+  required: ["trendAnalytics", "aiRecommendations"]
+};
+
+const step3Schema = {
+  type: Type.OBJECT,
+  properties: {
+    smartNotesSnippet: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          studentId: { type: Type.STRING },
+          name: { type: Type.STRING },
+          snippet: { type: Type.STRING, description: "Lời nhận xét mẫu súc tích nhưng đầy thấu cảm để dán vào sổ liên lạc điện tử" }
+        },
+        required: ["studentId", "name", "snippet"]
+      }
+    }
+  },
+  required: ["smartNotesSnippet"]
+};
 
 interface AIAdvisorHubProps {
   students: Student[];
@@ -242,66 +352,104 @@ export default function AIAdvisorHub({ students }: AIAdvisorHubProps) {
     setStep3Status('idle');
 
     try {
-      const userApiKey = localStorage.getItem('gemini_api_key') || '';
+      const userApiKey = (localStorage.getItem('gemini_api_key') || '').trim();
       const userModel = localStorage.getItem('gemini_model') || 'gemini-3-flash-preview';
 
-      // Step 1
-      const res1 = await fetch('/api/advisor/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          students,
-          apiKey: userApiKey,
-          model: userModel,
-          step: 1
-        })
+      if (!userApiKey) {
+        throw new Error("GEMINI_API_KEY chưa được cấu hình. Giáo viên vui lòng thiết lập khóa API Gemini trong mục Cài đặt AI (nút đỏ trên Header).");
+      }
+
+      // Convert students list into readable text data
+      const serializedStudents = students.map(s => {
+        const mathAvg = s.academic.math.length ? (s.academic.math.reduce((acc, currentValue) => acc + currentValue.score, 0) / s.academic.math.length).toFixed(1) : "N/A";
+        const litAvg = s.academic.literature.length ? (s.academic.literature.reduce((acc, currentValue) => acc + currentValue.score, 0) / s.academic.literature.length).toFixed(1) : "N/A";
+        const engAvg = s.academic.english.length ? (s.academic.english.reduce((acc, currentValue) => acc + currentValue.score, 0) / s.academic.english.length).toFixed(1) : "N/A";
+
+        return {
+          id: s.id,
+          name: s.name,
+          gender: s.gender,
+          targetGrade: s.targetGrade,
+          attitudeScore: s.attitudeScore,
+          averages: { math: mathAvg, literature: litAvg, english: engAvg },
+          attitudeLogs: s.attitudeLogs.slice(-6),
+          selfEvaluations: s.selfEvaluations,
+          peerEvaluations: s.peerEvaluations,
+          teacherNotes: s.teacherNotes
+        };
       });
 
-      const data1 = await res1.json();
-      if (!res1.ok) {
-        const errorCode = data1.error ? ` [${data1.error}]` : "";
-        throw new Error((data1.message || "Lỗi tại Bước 1.") + errorCode);
-      }
+      const fallbackList = ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-flash"];
+      const modelsToTry = [userModel, ...fallbackList.filter(m => m !== userModel)];
+
+      const runClientStep = async (prompt: string, schema: any) => {
+        const genAI = new GoogleGenAI({ apiKey: userApiKey });
+        let lastError: any = null;
+        for (const currentModel of modelsToTry) {
+          try {
+            const response = await genAI.models.generateContent({
+              model: currentModel,
+              contents: prompt,
+              config: {
+                systemInstruction: SYSTEM_INSTRUCTION,
+                responseMimeType: "application/json",
+                responseSchema: schema,
+                temperature: 0.7
+              }
+            });
+            if (response.text) {
+              return JSON.parse(response.text.trim());
+            }
+          } catch (e: any) {
+            console.warn(`[AI Client Model Fallback] Model ${currentModel} failed:`, e.message || e);
+            lastError = e;
+          }
+        }
+        const rawErrorCode = lastError?.status || lastError?.statusText || "RESOURCE_EXHAUSTED";
+        throw new Error((lastError?.message || "Tất cả các model AI đều thất bại.") + ` [${rawErrorCode}]`);
+      };
+
+      // Step 1
+      const prompt1 = `
+Dưới đây là dữ liệu thô của lớp học thông minh hiện tại:
+${JSON.stringify(serializedStudents, null, 2)}
+
+Hãy đóng vai trò là một Chuyên gia EdTech & Trợ lý Sư phạm, nghiên cứu kỹ để lập báo cáo Bước 1:
+- Tính toán dashboardSummary (Điểm trung bình học tập cả lớp, sỹ số, trung bình thái độ rèn luyện, tỷ lệ học sinh mũi nhọn, tỷ lệ học sinh cần hỗ trợ).
+- Xác định deepInsights bao gồm danh sách học sinh mũi nhọn (shiningStars) và danh sách học sinh cần hỗ trợ (riskGroup) kèm theo lý do cụ thể và phân loại (academic, behavior, hoặc both).
+
+Nội dung phản hồi cần nghiêm ngặt tuân thủ cấu trúc JSON quy định trong schema. Thể hiện sự sâu sắc của một nhà tư vấn sư phạm.
+      `;
+      const data1 = await runClientStep(prompt1, step1Schema);
       setStep1Status('success');
       setStep2Status('loading');
 
       // Step 2
-      const res2 = await fetch('/api/advisor/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          students,
-          apiKey: userApiKey,
-          model: userModel,
-          step: 2
-        })
-      });
+      const prompt2 = `
+Dưới đây là dữ liệu thô của lớp học thông minh hiện tại:
+${JSON.stringify(serializedStudents, null, 2)}
 
-      const data2 = await res2.json();
-      if (!res2.ok) {
-        const errorCode = data2.error ? ` [${data2.error}]` : "";
-        throw new Error((data2.message || "Lỗi tại Bước 2.") + errorCode);
-      }
+Hãy đóng vai trò là một Chuyên gia EdTech & Trợ lý Sư phạm, nghiên cứu kỹ để lập báo cáo Bước 2:
+- Phân tích biến động, xu hướng và bầu không khí chung của lớp bằng lời văn sư phạm sâu rộng (trendAnalytics).
+- Đưa ra các khuyến nghị giải pháp sư phạm (aiRecommendations) bao gồm ngắn hạn (shortTerm) và dài hạn (longTerm).
+
+Nội dung phản hồi cần nghiêm ngặt tuân thủ cấu trúc JSON quy định trong schema.
+      `;
+      const data2 = await runClientStep(prompt2, step2Schema);
       setStep2Status('success');
       setStep3Status('loading');
 
       // Step 3
-      const res3 = await fetch('/api/advisor/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          students,
-          apiKey: userApiKey,
-          model: userModel,
-          step: 3
-        })
-      });
+      const prompt3 = `
+Dưới đây là dữ liệu thô của lớp học thông minh hiện tại:
+${JSON.stringify(serializedStudents, null, 2)}
 
-      const data3 = await res3.json();
-      if (!res3.ok) {
-        const errorCode = data3.error ? ` [${data3.error}]` : "";
-        throw new Error((data3.message || "Lỗi tại Bước 3.") + errorCode);
-      }
+Hãy đóng vai trò là một Chuyên gia EdTech & Trợ lý Sư phạm, nghiên cứu kỹ để lập báo cáo Bước 3:
+- Tạo danh sách các smartNotesSnippet: Lời nhận xét mẫu súc tích nhưng đầy thấu cảm cho từng học sinh để dán vào sổ liên lạc điện tử gửi phụ huynh.
+
+Nội dung phản hồi cần nghiêm ngặt tuân thủ cấu trúc JSON quy định trong schema.
+      `;
+      const data3 = await runClientStep(prompt3, step3Schema);
       setStep3Status('success');
 
       // Combine step results into single AIAnalysisResult object
