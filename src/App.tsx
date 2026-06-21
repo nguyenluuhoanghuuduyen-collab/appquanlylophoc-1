@@ -35,6 +35,124 @@ import {
   Settings,
   Key
 } from 'lucide-react';
+// Simple but robust CSV line parser to handle quotes & commas
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+// Parse CSV text from Google Sheets into structured Student objects
+function parseCSV(csvText: string) {
+  const lines = csvText.split(/\r?\n/);
+  if (lines.length === 0) return [];
+  
+  const headers = parseCSVLine(lines[0]);
+  const studentsData: any[] = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    const row = parseCSVLine(line);
+    const studentObj: any = {
+      academic: { math: [], literature: [], english: [] },
+      attitudeLogs: [],
+      peerEvaluations: [],
+      selfEvaluations: [],
+      teacherNotes: []
+    };
+    
+    headers.forEach((header, colIndex) => {
+      const val = row[colIndex] || "";
+      const lowerHeader = header.toLowerCase().trim();
+      
+      if (lowerHeader === "id") {
+        studentObj.id = val;
+      } else if (lowerHeader === "họ và tên" || lowerHeader === "tên" || lowerHeader === "name" || lowerHeader === "ho va ten") {
+        studentObj.name = val;
+      } else if (lowerHeader === "giới tính" || lowerHeader === "gioi tinh" || lowerHeader === "gender") {
+        studentObj.gender = val === "Nữ" || val === "Nu" || val === "female" || val === "nữ" ? "Nữ" : "Nam";
+      } else if (lowerHeader === "ảnh đại diện" || lowerHeader === "ảnh" || lowerHeader === "avatar") {
+        studentObj.avatar = val;
+      } else if (lowerHeader === "liên hệ phụ huynh" || lowerHeader === "liên hệ" || lowerHeader === "parent contact" || lowerHeader === "lien he") {
+        studentObj.parentContact = val;
+      } else if (lowerHeader === "điểm mục tiêu" || lowerHeader === "mục tiêu" || lowerHeader === "target grade" || lowerHeader === "target") {
+        studentObj.targetGrade = parseFloat(val) || 8.0;
+      } else if (lowerHeader === "điểm thái độ" || lowerHeader === "thái độ" || lowerHeader === "attitude score" || lowerHeader === "attitude") {
+        studentObj.attitudeScore = parseInt(val) || 100;
+      } else if (lowerHeader === "nhận xét" || lowerHeader === "nhận xét giáo viên" || lowerHeader === "teacher note" || lowerHeader === "ghi chú") {
+        if (val) {
+          studentObj.teacherNotes.push({
+            id: "note-sync-" + Date.now() + "-" + Math.random().toString(36).substring(2, 6),
+            date: new Date().toISOString().split('T')[0],
+            content: val,
+            category: "academic"
+          });
+        }
+      } else {
+        // Check academic grades (Toán, Văn, Anh)
+        const score = parseFloat(val);
+        if (!isNaN(score)) {
+          if (lowerHeader.startsWith("toán") || lowerHeader.startsWith("toan") || lowerHeader.startsWith("math")) {
+            const examName = header.includes("-") ? header.split("-")[1].trim() : header;
+            studentObj.academic.math.push({ name: examName, score });
+          } else if (lowerHeader.startsWith("văn") || lowerHeader.startsWith("van") || lowerHeader.startsWith("lit")) {
+            const examName = header.includes("-") ? header.split("-")[1].trim() : header;
+            studentObj.academic.literature.push({ name: examName, score });
+          } else if (lowerHeader.startsWith("anh") || lowerHeader.startsWith("eng")) {
+            const examName = header.includes("-") ? header.split("-")[1].trim() : header;
+            studentObj.academic.english.push({ name: examName, score });
+          }
+        }
+      }
+    });
+    
+    if (studentObj.name) {
+      if (!studentObj.id) {
+        studentObj.id = "std-sync-" + Math.random().toString(36).substring(2, 11);
+      }
+      if (!studentObj.avatar) {
+        studentObj.avatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100';
+      }
+      if (!studentObj.parentContact) {
+        studentObj.parentContact = "Chưa cấu hình";
+      }
+      if (!studentObj.attitudeScore) {
+        studentObj.attitudeScore = 100;
+      }
+      studentObj.attitudeLogs.push({
+        id: "log-sync-" + Date.now(),
+        date: new Date().toISOString().split('T')[0],
+        points: studentObj.attitudeScore,
+        reason: "Đồng bộ điểm rèn luyện ban đầu từ Google Sheets",
+        tag: "Phát biểu"
+      });
+      
+      studentsData.push(studentObj);
+    }
+  }
+  
+  return studentsData;
+}
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
@@ -320,26 +438,41 @@ export default function App() {
     }
   };
 
-  // Fetch Google Sheets and parse
+  // Fetch Google Sheets and parse directly on client-side to bypass Vercel serverless routing
   const handleLoadSheetData = async () => {
     if (!sheetUrl.trim()) return;
     setSyncLoading(true);
     setSyncError(null);
     setSyncPreview(null);
     try {
-      const res = await fetch('/api/sync/sheets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: sheetUrl })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Không thể tải dữ liệu Google Sheets.");
+      // Extract spreadsheet ID
+      const match = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      const spreadsheetId = match ? match[1] : null;
+      if (!spreadsheetId) {
+        throw new Error("Link Google Sheets không hợp lệ. Hãy kiểm tra lại định dạng link.");
       }
-      if (data.studentsCount === 0) {
+      
+      // Extract gid
+      const gidMatch = sheetUrl.match(/[#&]gid=([0-9]+)/);
+      const gid = gidMatch ? gidMatch[1] : null;
+      
+      let exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv`;
+      if (gid) {
+        exportUrl += `&gid=${gid}`;
+      }
+      
+      const response = await fetch(exportUrl);
+      if (!response.ok) {
+        throw new Error(`Không thể kết nối Google Sheets: ${response.status} ${response.statusText}. Hãy chắc chắn rằng bạn đã chia sẻ bảng tính ở chế độ công khai (Bất kỳ ai có liên kết đều có thể xem).`);
+      }
+      
+      const csvText = await response.text();
+      const parsedStudents = parseCSV(csvText);
+      
+      if (parsedStudents.length === 0) {
         throw new Error("Không tìm thấy học sinh hợp lệ nào từ bảng tính. Vui lòng kiểm tra lại cấu trúc cột.");
       }
-      setSyncPreview(data.students);
+      setSyncPreview(parsedStudents);
     } catch (e: any) {
       console.error(e);
       setSyncError(e.message || "Đã xảy ra lỗi khi kết nối hoặc xử lý Google Sheets. Vui lòng kiểm tra lại link.");
