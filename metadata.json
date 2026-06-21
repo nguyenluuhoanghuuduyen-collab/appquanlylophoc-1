@@ -1,0 +1,6 @@
+{
+  "name": "QUẢN LÝ LỚP HỌC",
+  "description": "Hệ thống quản lý lớp học thông minh tích hợp trợ lý AI phân tích thi đua, điểm số, học bạ đa chiều và đề xuất giải pháp sư phạm chuẩn xác.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
